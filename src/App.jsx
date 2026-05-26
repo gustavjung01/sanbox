@@ -111,6 +111,7 @@ export default function App() {
   const [isRunning, setIsRunning] = useState(false)
   const [commandId, setCommandId] = useState(0)
   const [activeTab, setActiveTab] = useState('editor')
+  const [activePanel, setActivePanel] = useState('chat')
 
   const logEndRef = useRef(null)
 
@@ -132,30 +133,59 @@ export default function App() {
   useEffect(() => {
     if (!window.electronAPI) return
 
+    let currentOutput = ''
+    let isChatCommand = false
+
     const removeListener = window.electronAPI.onCommandOutput((data) => {
-      if (data.type === 'stdout' || data.type === 'stderr') {
-        setLogs(prev => [...prev, {
-          id: Date.now(),
-          type: data.type,
-          text: data.data,
-          timestamp: new Date().toLocaleTimeString()
-        }])
-      } else if (data.type === 'info') {
-        setLogs(prev => [...prev, {
-          id: Date.now(),
-          type: 'info',
-          text: data.data,
-          timestamp: new Date().toLocaleTimeString()
-        }])
-      } else if (data.type === 'success' || data.type === 'error') {
-        setLogs(prev => [...prev, {
-          id: Date.now(),
-          type: data.type,
-          text: data.data,
-          timestamp: new Date().toLocaleTimeString()
-        }])
-        setStatus(data.type === 'success' ? 'DONE' : 'ERROR')
+      if (data.type === 'info') {
+        isChatCommand = data.data.includes('command-code')
+        if (isChatCommand) {
+          currentOutput = ''
+        } else {
+          setLogs(prev => [...prev, {
+            id: Date.now(),
+            type: 'info',
+            text: data.data,
+            timestamp: new Date().toLocaleTimeString()
+          }])
+        }
+      } else if (data.type === 'stdout' || data.type === 'stderr') {
+        if (isChatCommand) {
+          currentOutput += data.data
+        } else {
+          setLogs(prev => [...prev, {
+            id: Date.now(),
+            type: data.type,
+            text: data.data,
+            timestamp: new Date().toLocaleTimeString()
+          }])
+        }
+      } else if (data.type === 'success') {
+        if (isChatCommand && currentOutput) {
+          setChatMessages(prev => [...prev, {
+            id: Date.now(),
+            role: 'assistant',
+            text: currentOutput.trim(),
+            timestamp: new Date().toLocaleTimeString()
+          }])
+        }
+        setStatus('DONE')
         setIsRunning(false)
+        currentOutput = ''
+        isChatCommand = false
+      } else if (data.type === 'error') {
+        setStatus('ERROR')
+        setIsRunning(false)
+        if (isChatCommand) {
+          setChatMessages(prev => [...prev, {
+            id: Date.now(),
+            role: 'assistant',
+            text: currentOutput.trim() || '[Error]',
+            timestamp: new Date().toLocaleTimeString()
+          }])
+        }
+        currentOutput = ''
+        isChatCommand = false
       }
     })
 
@@ -283,7 +313,18 @@ export default function App() {
       timestamp: new Date().toLocaleTimeString()
     }])
 
+    setPrompt('')
+    setActivePanel('chat')
     runCommand('command-code', ['-m', selectedModel, '--print', promptText], 'Command Code')
+  }
+
+  const handlePromptKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      if (!isRunning && prompt.trim()) {
+        handleSendPrompt()
+      }
+    }
   }
 
   const handleOpenInteractiveTerminal = async () => {
@@ -450,7 +491,8 @@ export default function App() {
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Enter prompt for Command Code..."
+              onKeyDown={handlePromptKeyDown}
+              placeholder="Enter prompt for Command Code... (Enter to send, Shift+Enter for new line)"
               className="prompt-input"
               rows={6}
             />
@@ -482,16 +524,53 @@ export default function App() {
             </div>
           </div>
 
-          <div className="chat-context">
-            <div className="context-item">
-              <strong>Workspace:</strong> {workspace}
-            </div>
-            {currentFile && (
-              <div className="context-item">
-                <strong>File:</strong> {currentFile}
-              </div>
-            )}
+          <div className="chat-tabs">
+            <button
+              className={`chat-tab ${activePanel === 'chat' ? 'active' : ''}`}
+              onClick={() => setActivePanel('chat')}
+            >
+              Chat ({chatMessages.length})
+            </button>
+            <button
+              className={`chat-tab ${activePanel === 'context' ? 'active' : ''}`}
+              onClick={() => setActivePanel('context')}
+            >
+              Context
+            </button>
           </div>
+
+          {activePanel === 'chat' ? (
+            <div className="chat-messages">
+              {chatMessages.length === 0 ? (
+                <div className="chat-empty">
+                  <Zap size={32} />
+                  <p>No messages yet. Send a prompt to start chatting.</p>
+                </div>
+              ) : (
+                chatMessages.map(msg => (
+                  <div key={msg.id} className={`chat-message ${msg.role}`}>
+                    <div className="chat-message-header">
+                      <span className="chat-role">{msg.role === 'user' ? 'You' : 'Command Code'}</span>
+                      <span className="chat-time">{msg.timestamp}</span>
+                    </div>
+                    <pre className="chat-text">{msg.text}</pre>
+                  </div>
+                ))
+              )}
+              <div ref={logEndRef} />
+            </div>
+          ) : (
+            <div className="chat-context">
+              <div className="context-item">
+                <strong>Workspace:</strong> {workspace}
+              </div>
+              {currentFile && (
+                <div className="context-item">
+                  <strong>File:</strong> {currentFile}
+                </div>
+              )}
+            </div>
+          )}
         </aside>
       </main>
     </div>

@@ -280,25 +280,21 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
       return;
     }
 
-    const formattedArgs = args ? args.map(arg => {
-      if (arg.includes(' ') || arg.includes('"')) {
-        return `"${arg.replace(/"/g, '\\"')}"`;
-      }
-      return arg;
-    }).join(' ') : '';
+    const formattedCmd = args && args.length > 0
+      ? `${command} ${args.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')}`
+      : command;
 
     mainWindow.webContents.send('command-output', {
       id,
       type: 'info',
-      data: `Running: ${command}${formattedArgs ? ' ' + formattedArgs : ''}\n`
+      data: `Running: ${formattedCmd}\n`
     });
 
     try {
-      const isWin = process.platform === 'win32';
-      
       currentProcess = spawn(command, args || [], {
         cwd: workDir,
-        shell: isWin,
+        shell: false,
+        windowsHide: true,
         env: { ...process.env, FORCE_COLOR: '1' }
       });
 
@@ -332,7 +328,65 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
         });
       });
 
-      currentProcess.on('error', (error) => {
+      currentProcess.on('error', async (error) => {
+        if (error.code === 'ENOENT' && command === 'command-code') {
+          mainWindow.webContents.send('command-output', {
+            id,
+            type: 'info',
+            data: '[Retrying with command-code.cmd...]\n'
+          });
+
+          try {
+            currentProcess = spawn('command-code.cmd', args || [], {
+              cwd: workDir,
+              shell: false,
+              windowsHide: true,
+              env: { ...process.env, FORCE_COLOR: '1' }
+            });
+
+            let retryStdout = '';
+            let retryStderr = '';
+
+            currentProcess.stdout.on('data', (data) => {
+              const text = data.toString();
+              retryStdout += text;
+              mainWindow.webContents.send('command-output', { id, type: 'stdout', data: text });
+            });
+
+            currentProcess.stderr.on('data', (data) => {
+              const text = data.toString();
+              retryStderr += text;
+              mainWindow.webContents.send('command-output', { id, type: 'stderr', data: text });
+            });
+
+            currentProcess.on('close', (code) => {
+              currentProcess = null;
+              mainWindow.webContents.send('command-output', {
+                id,
+                type: code === 0 ? 'success' : 'error',
+                data: code === 0 ? '\n[Done]' : `\n[Exit code: ${code}]`
+              });
+              resolve({
+                success: code === 0,
+                code,
+                stdout: retryStdout,
+                stderr: retryStderr
+              });
+            });
+
+            return;
+          } catch (retryError) {
+            currentProcess = null;
+            mainWindow.webContents.send('command-output', {
+              id,
+              type: 'error',
+              data: `\n[Error: command-code not found. Please install Command Code CLI.]`
+            });
+            resolve({ success: false, error: retryError.message });
+            return;
+          }
+        }
+
         currentProcess = null;
         mainWindow.webContents.send('command-output', {
           id,
