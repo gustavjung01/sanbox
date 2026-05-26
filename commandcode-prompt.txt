@@ -1,0 +1,13 @@
+Đây là repo sandbox UI mô phỏng giao diện code agent. Không phải repo chính.
+
+Nhiệm vụ:
+- Làm giao diện này giống app chat code agent thật hơn.
+- Thêm layout 3 cột: sidebar file, vùng chat, vùng preview/diff.
+- Thêm mock terminal log, model selector, task checklist.
+- Tối ưu mobile/tablet.
+- Có thể thêm component nhỏ trong src/ nếu cần.
+- Chỉ dùng dữ liệu mock.
+- Không thêm backend.
+- Không thêm auth/payment/API/key.
+- Không git push.
+- Sau khi sửa chạy npm run build và báo cáo file đã sửa.
