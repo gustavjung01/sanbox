@@ -170,6 +170,13 @@ export default function App() {
     if (result.success) {
       setFiles(result.files)
       autoOpenFile(path)
+    } else {
+      setLogs(prev => [...prev, {
+        id: Date.now(),
+        type: 'error',
+        text: `Cannot load workspace: ${result.error}`,
+        timestamp: new Date().toLocaleTimeString()
+      }])
     }
   }
 
@@ -177,13 +184,13 @@ export default function App() {
     if (!window.electronAPI) return
     const result = await window.electronAPI.getAutoOpenFile(path)
     if (result.success) {
-      openFile(result.filePath)
+      openFile(result.filePath, path)
     }
   }
 
-  const openFile = async (relativePath) => {
+  const openFile = async (relativePath, workspacePath = workspace) => {
     if (!window.electronAPI) return
-    const result = await window.electronAPI.readWorkspaceFile(workspace, relativePath)
+    const result = await window.electronAPI.readWorkspaceFile(workspacePath, relativePath)
     if (result.success) {
       setCurrentFile(relativePath)
       setFileContent(result.content)
@@ -258,19 +265,30 @@ export default function App() {
   }
 
   const handleSendPrompt = () => {
-    if (!prompt.trim()) return
-    
-    const context = `Workspace: ${workspace}${currentFile ? `\nCurrent file: ${currentFile}` : ''}`
-    const fullPrompt = `${context}\n\n${prompt}`
-    
+    const promptText = prompt.trim()
+    if (!promptText) {
+      setLogs(prev => [...prev, {
+        id: Date.now(),
+        type: 'error',
+        text: 'Prompt is empty',
+        timestamp: new Date().toLocaleTimeString()
+      }])
+      return
+    }
+
     setChatMessages(prev => [...prev, {
       id: Date.now(),
       role: 'user',
-      text: prompt,
+      text: promptText,
       timestamp: new Date().toLocaleTimeString()
     }])
-    
-    runCommand('command-code', ['-m', selectedModel], 'Command Code')
+
+    runCommand('command-code', ['-m', selectedModel, '--print', promptText], 'Command Code')
+  }
+
+  const handleOpenInteractiveTerminal = async () => {
+    if (!window.electronAPI) return
+    await window.electronAPI.openInteractiveTerminal(workspace, selectedModel)
   }
 
   const currentStatus = STATUS[status] || STATUS.READY
@@ -445,13 +463,21 @@ export default function App() {
                 <Copy size={14} />
                 Copy
               </button>
-              <button 
-                onClick={handleSendPrompt} 
+              <button
+                onClick={handleSendPrompt}
                 disabled={isRunning || !prompt.trim()}
                 className="btn btn-primary btn-small"
               >
                 <Send size={14} />
                 Send
+              </button>
+              <button
+                onClick={handleOpenInteractiveTerminal}
+                disabled={isRunning}
+                className="btn btn-small"
+              >
+                <Terminal size={14} />
+                Interactive
               </button>
             </div>
           </div>

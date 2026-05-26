@@ -190,11 +190,13 @@ ipcMain.handle('read-workspace-file', async (event, workspacePath, relativePath)
 
 ipcMain.handle('get-auto-open-file', async (event, workspacePath) => {
   try {
-    if (!fs.existsSync(workspacePath)) {
+    const workDir = workspacePath || DEFAULT_WORKSPACE;
+
+    if (!fs.existsSync(workDir)) {
       return { success: false, error: 'Workspace not found' };
     }
 
-    const files = fs.readdirSync(workspacePath);
+    const files = fs.readdirSync(workDir);
     
     const priorityFiles = ['README.md', 'readme.md', 'Readme.md', 'package.json'];
     for (const file of priorityFiles) {
@@ -237,7 +239,7 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
       mainWindow.webContents.send('command-output', {
         id,
         type: 'error',
-        data: 'Another command is already running. Stop it first.'
+        data: '[Error: Another command is already running. Stop it first.]'
       });
       resolve({ success: false, error: 'Process already running' });
       return;
@@ -249,7 +251,7 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
       mainWindow.webContents.send('command-output', {
         id,
         type: 'error',
-        data: `Directory does not exist: ${workDir}`
+        data: `[Error: Directory does not exist: ${workDir}]`
       });
       resolve({ success: false, error: 'Invalid directory' });
       return;
@@ -259,7 +261,7 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
       mainWindow.webContents.send('command-output', {
         id,
         type: 'error',
-        data: 'Access denied: directory outside allowed workspace'
+        data: '[Error: Access denied - directory outside allowed workspace]'
       });
       resolve({ success: false, error: 'Access denied' });
       return;
@@ -267,21 +269,28 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
 
     const allowedCommands = ['npm', 'command-code', 'npx', 'node'];
     const cmdBase = command.toLowerCase();
-    
+
     if (!allowedCommands.some(cmd => cmdBase === cmd || cmdBase.endsWith('\\' + cmd))) {
       mainWindow.webContents.send('command-output', {
         id,
         type: 'error',
-        data: `Command not allowed: ${command}`
+        data: `[Error: Command not allowed: ${command}]`
       });
       resolve({ success: false, error: 'Command not allowed' });
       return;
     }
 
+    const formattedArgs = args ? args.map(arg => {
+      if (arg.includes(' ') || arg.includes('"')) {
+        return `"${arg.replace(/"/g, '\\"')}"`;
+      }
+      return arg;
+    }).join(' ') : '';
+
     mainWindow.webContents.send('command-output', {
       id,
       type: 'info',
-      data: `> Running: ${command} ${args ? args.join(' ') : ''}\n> Working directory: ${workDir}\n`
+      data: `Running: ${command}${formattedArgs ? ' ' + formattedArgs : ''}\n`
     });
 
     try {
@@ -310,11 +319,10 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
 
       currentProcess.on('close', (code) => {
         currentProcess = null;
-        const exitMsg = `\n> Process exited with code ${code}\n`;
         mainWindow.webContents.send('command-output', {
           id,
           type: code === 0 ? 'success' : 'error',
-          data: exitMsg
+          data: code === 0 ? '\n[Done]' : `\n[Exit code: ${code}]`
         });
         resolve({
           success: code === 0,
@@ -329,7 +337,7 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
         mainWindow.webContents.send('command-output', {
           id,
           type: 'error',
-          data: `\n> Error: ${error.message}\n`
+          data: `\n[Error: ${error.message}]`
         });
         resolve({ success: false, error: error.message });
       });
@@ -339,7 +347,7 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
       mainWindow.webContents.send('command-output', {
         id,
         type: 'error',
-        data: `\n> Failed to start: ${error.message}\n`
+        data: `\n[Failed to start: ${error.message}]`
       });
       resolve({ success: false, error: error.message });
     }
@@ -380,6 +388,27 @@ function killProcess() {
 ipcMain.handle('open-browser', async (event, url) => {
   try {
     await shell.openExternal(url || 'http://localhost:5173');
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('open-interactive-terminal', async (event, workspacePath, model) => {
+  try {
+    const workDir = workspacePath || DEFAULT_WORKSPACE;
+
+    if (!fs.existsSync(workDir)) {
+      return { success: false, error: 'Workspace not found' };
+    }
+
+    const command = `cd /d "${workDir}" && command-code -m "${model}"`;
+    exec(`start cmd.exe /K "${command}"`, (error) => {
+      if (error) {
+        console.error('Error opening terminal:', error);
+      }
+    });
+
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

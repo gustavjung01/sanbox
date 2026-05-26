@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Browser
   openBrowser: (url) => ipcRenderer.invoke('open-browser', url),
+
+  // Interactive Terminal
+  openInteractiveTerminal: (workspacePath, model) => ipcRenderer.invoke('open-interactive-terminal', workspacePath, model),
   
   // Event listeners
   onCommandOutput: (callback) => {
