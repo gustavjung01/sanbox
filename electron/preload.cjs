@@ -1,12 +1,16 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose protected methods that allow the renderer process to use
-// the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
   // Workspace
   selectWorkspace: () => ipcRenderer.invoke('select-workspace'),
   getDefaultWorkspace: () => ipcRenderer.invoke('get-default-workspace'),
-  openFolder: (path) => ipcRenderer.invoke('open-folder', path),
+  openFolderInExplorer: (path) => ipcRenderer.invoke('open-folder-in-explorer', path),
+  
+  // Files
+  listWorkspaceFiles: (workspacePath) => ipcRenderer.invoke('list-workspace-files', workspacePath),
+  readWorkspaceFile: (workspacePath, relativePath) => ipcRenderer.invoke('read-workspace-file', workspacePath, relativePath),
+  openFileExternal: (filePath) => ipcRenderer.invoke('open-file-external', filePath),
+  getAutoOpenFile: (workspacePath) => ipcRenderer.invoke('get-auto-open-file', workspacePath),
   
   // Prompt
   readPromptFile: (workspacePath) => ipcRenderer.invoke('read-prompt-file', workspacePath),
@@ -25,7 +29,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('command-output', handler);
   },
   
-  // Remove all listeners
   removeAllListeners: (channel) => {
     ipcRenderer.removeAllListeners(channel);
   }

@@ -8,30 +8,31 @@ let currentProcess = null;
 
 const DEFAULT_WORKSPACE = 'F:\\1_A_Disk_D\\Tool\\sanbox';
 
+const EXCLUDED_DIRS = ['node_modules', 'dist', 'release', '.git', '.commandcode', 'coverage'];
+const EXCLUDED_EXTS = ['.exe', '.dll', '.asar', '.pak', '.map', '.bin', '.dat', '.ico', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.woff', '.woff2', '.ttf'];
+const MAX_FILE_SIZE = 1024 * 1024;
+
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1000,
-    minHeight: 600,
+    width: 1600,
+    height: 1000,
+    minWidth: 1200,
+    minHeight: 700,
     title: 'CC Launcher',
-    icon: path.join(__dirname, '../dist/favicon.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
-      webSecurity: false
+      sandbox: false
     },
     show: false,
-    backgroundColor: '#1a1a2e'
+    backgroundColor: '#0a0a0f'
   });
 
   mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
-    mainWindow.webContents.openDevTools();
   });
 
   mainWindow.on('closed', () => {
@@ -59,7 +60,25 @@ app.on('activate', () => {
   }
 });
 
-// IPC Handlers
+function isPathSafe(workspacePath, targetPath) {
+  const resolvedWorkspace = path.resolve(workspacePath);
+  const resolvedTarget = path.resolve(targetPath);
+  return resolvedTarget.startsWith(resolvedWorkspace);
+}
+
+function shouldExcludeFile(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (EXCLUDED_EXTS.includes(ext)) return true;
+  
+  const parts = filePath.split(path.sep);
+  return parts.some(part => EXCLUDED_DIRS.includes(part));
+}
+
+function shouldExcludeDir(dirPath) {
+  const parts = dirPath.split(path.sep);
+  return parts.some(part => EXCLUDED_DIRS.includes(part));
+}
+
 ipcMain.handle('select-workspace', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
@@ -76,12 +95,127 @@ ipcMain.handle('get-default-workspace', () => {
   return DEFAULT_WORKSPACE;
 });
 
-ipcMain.handle('open-folder', async (event, folderPath) => {
+ipcMain.handle('open-folder-in-explorer', async (event, folderPath) => {
   if (folderPath && fs.existsSync(folderPath)) {
     await shell.openPath(folderPath);
-    return true;
+    return { success: true };
   }
-  return false;
+  return { success: false, error: 'Folder not found' };
+});
+
+ipcMain.handle('open-file-external', async (event, filePath) => {
+  if (filePath && fs.existsSync(filePath)) {
+    await shell.openPath(filePath);
+    return { success: true };
+  }
+  return { success: false, error: 'File not found' };
+});
+
+ipcMain.handle('list-workspace-files', async (event, workspacePath) => {
+  try {
+    if (!fs.existsSync(workspacePath)) {
+      return { success: false, error: 'Workspace not found' };
+    }
+
+    const result = [];
+    
+    function scanDir(dirPath, relativePath = '') {
+      const items = fs.readdirSync(dirPath, { withFileTypes: true });
+      
+      for (const item of items) {
+        const itemRelativePath = relativePath ? `${relativePath}/${item.name}` : item.name;
+        const fullPath = path.join(dirPath, item.name);
+        
+        if (item.isDirectory()) {
+          if (!shouldExcludeDir(itemRelativePath)) {
+            result.push({
+              name: item.name,
+              path: itemRelativePath,
+              type: 'directory',
+              children: []
+            });
+            scanDir(fullPath, itemRelativePath);
+          }
+        } else {
+          if (!shouldExcludeFile(itemRelativePath)) {
+            result.push({
+              name: item.name,
+              path: itemRelativePath,
+              type: 'file',
+              ext: path.extname(item.name).toLowerCase()
+            });
+          }
+        }
+      }
+    }
+    
+    scanDir(workspacePath);
+    return { success: true, files: result };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('read-workspace-file', async (event, workspacePath, relativePath) => {
+  try {
+    if (!fs.existsSync(workspacePath)) {
+      return { success: false, error: 'Workspace not found' };
+    }
+
+    const fullPath = path.join(workspacePath, relativePath);
+    
+    if (!isPathSafe(workspacePath, fullPath)) {
+      return { success: false, error: 'Access denied: path outside workspace' };
+    }
+
+    if (!fs.existsSync(fullPath)) {
+      return { success: false, error: 'File not found' };
+    }
+
+    const stats = fs.statSync(fullPath);
+    if (stats.size > MAX_FILE_SIZE) {
+      return { success: false, error: 'File too large (max 1MB)' };
+    }
+
+    if (stats.isDirectory()) {
+      return { success: false, error: 'Cannot open directory as file' };
+    }
+
+    const content = fs.readFileSync(fullPath, 'utf-8');
+    return { success: true, content, path: relativePath };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('get-auto-open-file', async (event, workspacePath) => {
+  try {
+    if (!fs.existsSync(workspacePath)) {
+      return { success: false, error: 'Workspace not found' };
+    }
+
+    const files = fs.readdirSync(workspacePath);
+    
+    const priorityFiles = ['README.md', 'readme.md', 'Readme.md', 'package.json'];
+    for (const file of priorityFiles) {
+      if (files.includes(file)) {
+        return { success: true, filePath: file };
+      }
+    }
+
+    const textFiles = files.filter(f => {
+      const ext = path.extname(f).toLowerCase();
+      return ['.md', '.txt', '.js', '.jsx', '.ts', '.tsx', '.json', '.css', '.html'].includes(ext);
+    });
+
+    if (textFiles.length > 0) {
+      return { success: true, filePath: textFiles[0] };
+    }
+
+    return { success: false, error: 'No suitable file found' };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
 });
 
 ipcMain.handle('read-prompt-file', async (event, workspacePath) => {
@@ -100,10 +234,10 @@ ipcMain.handle('read-prompt-file', async (event, workspacePath) => {
 ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
   return new Promise((resolve) => {
     if (currentProcess) {
-      mainWindow.webContents.send('command-output', { 
-        id, 
-        type: 'error', 
-        data: 'Another command is already running. Stop it first.' 
+      mainWindow.webContents.send('command-output', {
+        id,
+        type: 'error',
+        data: 'Another command is already running. Stop it first.'
       });
       resolve({ success: false, error: 'Process already running' });
       return;
@@ -111,45 +245,51 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
 
     const workDir = cwd || DEFAULT_WORKSPACE;
     
-    // Validate working directory
     if (!fs.existsSync(workDir)) {
-      mainWindow.webContents.send('command-output', { 
-        id, 
-        type: 'error', 
-        data: `Directory does not exist: ${workDir}` 
+      mainWindow.webContents.send('command-output', {
+        id,
+        type: 'error',
+        data: `Directory does not exist: ${workDir}`
       });
       resolve({ success: false, error: 'Invalid directory' });
       return;
     }
 
-    // Security: only allow specific commands
+    if (!isPathSafe(DEFAULT_WORKSPACE, workDir)) {
+      mainWindow.webContents.send('command-output', {
+        id,
+        type: 'error',
+        data: 'Access denied: directory outside allowed workspace'
+      });
+      resolve({ success: false, error: 'Access denied' });
+      return;
+    }
+
     const allowedCommands = ['npm', 'command-code', 'npx', 'node'];
     const cmdBase = command.toLowerCase();
     
     if (!allowedCommands.some(cmd => cmdBase === cmd || cmdBase.endsWith('\\' + cmd))) {
-      mainWindow.webContents.send('command-output', { 
-        id, 
-        type: 'error', 
-        data: `Command not allowed: ${command}` 
+      mainWindow.webContents.send('command-output', {
+        id,
+        type: 'error',
+        data: `Command not allowed: ${command}`
       });
       resolve({ success: false, error: 'Command not allowed' });
       return;
     }
 
-    mainWindow.webContents.send('command-output', { 
-      id, 
-      type: 'info', 
-      data: `> Running: ${command} ${args ? args.join(' ') : ''}\n> Working directory: ${workDir}\n` 
+    mainWindow.webContents.send('command-output', {
+      id,
+      type: 'info',
+      data: `> Running: ${command} ${args ? args.join(' ') : ''}\n> Working directory: ${workDir}\n`
     });
 
     try {
-      // Use spawn for better control on Windows
       const isWin = process.platform === 'win32';
-      const shell = isWin ? true : false;
       
       currentProcess = spawn(command, args || [], {
         cwd: workDir,
-        shell: shell,
+        shell: isWin,
         env: { ...process.env, FORCE_COLOR: '1' }
       });
 
@@ -171,35 +311,35 @@ ipcMain.handle('run-command', async (event, { command, args, cwd, id }) => {
       currentProcess.on('close', (code) => {
         currentProcess = null;
         const exitMsg = `\n> Process exited with code ${code}\n`;
-        mainWindow.webContents.send('command-output', { 
-          id, 
-          type: code === 0 ? 'success' : 'error', 
-          data: exitMsg 
+        mainWindow.webContents.send('command-output', {
+          id,
+          type: code === 0 ? 'success' : 'error',
+          data: exitMsg
         });
-        resolve({ 
-          success: code === 0, 
-          code, 
-          stdout: stdoutData, 
-          stderr: stderrData 
+        resolve({
+          success: code === 0,
+          code,
+          stdout: stdoutData,
+          stderr: stderrData
         });
       });
 
       currentProcess.on('error', (error) => {
         currentProcess = null;
-        mainWindow.webContents.send('command-output', { 
-          id, 
-          type: 'error', 
-          data: `\n> Error: ${error.message}\n` 
+        mainWindow.webContents.send('command-output', {
+          id,
+          type: 'error',
+          data: `\n> Error: ${error.message}\n`
         });
         resolve({ success: false, error: error.message });
       });
 
     } catch (error) {
       currentProcess = null;
-      mainWindow.webContents.send('command-output', { 
-        id, 
-        type: 'error', 
-        data: `\n> Failed to start: ${error.message}\n` 
+      mainWindow.webContents.send('command-output', {
+        id,
+        type: 'error',
+        data: `\n> Failed to start: ${error.message}\n`
       });
       resolve({ success: false, error: error.message });
     }
@@ -222,10 +362,8 @@ function killProcess() {
   
   try {
     if (isWin) {
-      // On Windows, we need to kill the process tree
       exec(`taskkill /pid ${currentProcess.pid} /T /F`, (err) => {
         if (err) {
-          // Fallback to normal kill
           currentProcess.kill('SIGTERM');
         }
       });
